@@ -4,10 +4,9 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# Kalıcı dosya
 DATA_FILE = "keys.json"
 
-# JSON dosyası yoksa oluştur
+# JSON yoksa oluştur
 if not os.path.isfile(DATA_FILE):
     with open(DATA_FILE, "w") as f:
         json.dump([], f)
@@ -26,22 +25,22 @@ def key_olustur(tip):
     yeni_key = str(uuid.uuid4()).upper()
     expire = None
     if tip=="gunluk":
-        expire=(datetime.now()+timedelta(days=1)).isoformat()
+        expire = (datetime.now()+timedelta(days=1)).isoformat()
     elif tip=="haftalik":
-        expire=(datetime.now()+timedelta(weeks=1)).isoformat()
+        expire = (datetime.now()+timedelta(weeks=1)).isoformat()
     elif tip=="aylik":
-        expire=(datetime.now()+timedelta(days=30)).isoformat()
+        expire = (datetime.now()+timedelta(days=30)).isoformat()
     elif tip=="yillik":
-        expire=(datetime.now()+timedelta(days=365)).isoformat()
+        expire = (datetime.now()+timedelta(days=365)).isoformat()
     elif tip in ["admin","sinirsiz"]:
-        expire=None
+        expire = None
 
     keys.append({
-        "key":yeni_key,
-        "tip":tip,
-        "aktif":True,
-        "olusturma_tarihi":datetime.now().isoformat(),
-        "expire":expire
+        "key": yeni_key,
+        "tip": tip,
+        "aktif": True,
+        "olusturma_tarihi": datetime.now().isoformat(),
+        "expire": expire
     })
     save_keys(keys)
     return jsonify({"durum":"ok","key":yeni_key,"tip":tip,"expire":expire})
@@ -60,9 +59,9 @@ def key_kontrol():
 
 @app.route("/key/sil")
 def key_sil():
-    key=request.args.get("key")
-    keys=load_keys()
-    new_keys=[k for k in keys if k["key"]!=key]
+    key = request.args.get("key")
+    keys = load_keys()
+    new_keys = [k for k in keys if k["key"]!=key]
     if len(new_keys)==len(keys):
         return jsonify({"durum":"hata","mesaj":"Key yok"})
     save_keys(new_keys)
@@ -73,4 +72,6 @@ def key_liste():
     return jsonify(load_keys())
 
 if __name__=="__main__":
-    app.run(host="0.0.0.0",port=10000)
+    # Railway port uyumu
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
