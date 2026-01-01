@@ -1,49 +1,11 @@
 from flask import Flask, request, jsonify, Response
-import json, os, random
+import json, os, random, string
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
 DATA_FILE = "keys.json"
 FREE_KEY = "FREESORGUPANELİ2026"
-
-# ------------------ DOSYA İŞLEMLERİ ------------------
-
-def init_file():
-    if not os.path.isfile(DATA_FILE):
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump([{
-                "key": FREE_KEY,
-                "rol": "free",
-                "tip": "sabit",
-                "olusturma_tarihi": datetime.now().isoformat(),
-                "expire": None
-            }], f, indent=2, ensure_ascii=False)
-
-def load_keys():
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return []
-
-def save_keys(keys):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(keys, f, indent=2, ensure_ascii=False)
-
-init_file()
-
-# ------------------ KEY ÜRETİCİ ------------------
-
-KARAKTERLER = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-
-def generate_key(existing_keys, length=10):
-    while True:
-        key = "".join(random.choice(KARAKTERLER) for _ in range(length))
-        if key not in existing_keys:
-            return key
-
-# ------------------ SÜRELER ------------------
 
 SURELER = {
     "gunluk": timedelta(days=1),
@@ -52,39 +14,62 @@ SURELER = {
     "yillik": timedelta(days=365)
 }
 
-def temizle_expire(keys):
-    yeni = []
-    for k in keys:
-        if k["key"] == FREE_KEY:
-            yeni.append(k)
-        elif k["expire"] is None:
-            yeni.append(k)
-        else:
-            try:
-                if datetime.fromisoformat(k["expire"]) > datetime.now():
-                    yeni.append(k)
-            except:
-                pass
-    return yeni
+# ------------------ DOSYA İŞLEMLERİ ------------------
+
+def save_keys(keys):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(keys, f, indent=2, ensure_ascii=False)
+
+def load_keys():
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            keys = json.load(f)
+    except:
+        keys = []
+
+    # Free key her zaman olsun
+    if not any(k["key"] == FREE_KEY for k in keys):
+        keys.append({
+            "key": FREE_KEY,
+            "rol": "free",
+            "tip": "sabit",
+            "olusturma_tarihi": datetime.now().isoformat(),
+            "expire": None
+        })
+        save_keys(keys)
+
+    return keys
+
+def generate_key(length=10):
+    chars = string.ascii_uppercase + string.digits
+    return ''.join(random.choices(chars, k=length))
+
+def key_gecerli_mi(k):
+    if k["expire"] is None:
+        return True
+    try:
+        return datetime.fromisoformat(k["expire"]) > datetime.now()
+    except:
+        return False
 
 # ------------------ API ------------------
 
 @app.route("/key/olustur/<tip>")
 def key_olustur(tip):
+    keys = load_keys()
+
     if "_" not in tip:
-        return jsonify({"hata": "Tip hatalı (örn: admin_haftalik)"}), 400
+        return jsonify({"durum": "hata", "mesaj": "Format: admin_haftalik / vip_suresiz"}), 400
 
     rol, sure = tip.split("_", 1)
-    keys = temizle_expire(load_keys())
-
-    mevcut_keyler = [k["key"] for k in keys]
-    yeni_key = generate_key(mevcut_keyler, 10)
 
     expire = None
     if sure != "suresiz":
         if sure not in SURELER:
-            return jsonify({"hata": "Geçersiz süre"}), 400
+            return jsonify({"durum": "hata", "mesaj": "Geçersiz süre"}), 400
         expire = (datetime.now() + SURELER[sure]).isoformat()
+
+    yeni_key = generate_key(10)
 
     keys.append({
         "key": yeni_key,
@@ -97,7 +82,7 @@ def key_olustur(tip):
     save_keys(keys)
 
     return jsonify({
-        "durum": "ok",
+        "durum": "aktif",
         "key": yeni_key,
         "rol": rol,
         "tip": sure,
@@ -107,39 +92,48 @@ def key_olustur(tip):
 @app.route("/key/kontrol")
 def key_kontrol():
     key = request.args.get("key")
-    keys = temizle_expire(load_keys())
-    save_keys(keys)
+    keys = load_keys()
 
     for k in keys:
         if k["key"] == key:
-            return jsonify({
-                "gecerli": True,
-                "rol": k["rol"],
-                "tip": k["tip"],
-                "expire": k["expire"]
-            })
-    return jsonify({"gecerli": False})
+            if key_gecerli_mi(k):
+                return jsonify({
+                    "durum": "aktif",
+                    "rol": k["rol"],
+                    "tip": k["tip"],
+                    "expire": k["expire"]
+                })
+            else:
+                return jsonify({"durum": "gecersiz"})
+
+    return jsonify({"durum": "gecersiz"})
 
 @app.route("/key/sil")
 def key_sil():
     key = request.args.get("key")
+
     if key == FREE_KEY:
-        return jsonify({"hata": "Free key silinemez"})
+        return jsonify({"durum": "hata", "mesaj": "Free key silinemez"})
 
     keys = load_keys()
     yeni = [k for k in keys if k["key"] != key]
 
     if len(yeni) == len(keys):
-        return jsonify({"hata": "Key bulunamadı"})
+        return jsonify({"durum": "gecersiz"})
 
     save_keys(yeni)
-    return jsonify({"durum": "silindi"})
+    return jsonify({"durum": "ok"})
 
 @app.route("/key/liste")
 def key_liste():
-    keys = temizle_expire(load_keys())
-    save_keys(keys)
-    return jsonify(keys)
+    keys = load_keys()
+    sonuc = []
+
+    for k in keys:
+        durum = "aktif" if key_gecerli_mi(k) else "gecersiz"
+        sonuc.append({**k, "durum": durum})
+
+    return jsonify(sonuc)
 
 # ------------------ HTML ANA MENÜ ------------------
 
@@ -150,18 +144,17 @@ def index():
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
-<title>Sorgu Paneli</title>
+<title>Key Panel</title>
 <style>
 body{font-family:Arial;background:#f4f4f4}
-main{background:#fff;padding:20px;max-width:800px;margin:40px auto;border-radius:10px}
-button{padding:8px 12px;margin:5px}
-input,select{padding:6px}
-pre{background:#eee;padding:10px;max-height:300px;overflow:auto}
+.box{background:#fff;padding:20px;margin:30px auto;max-width:700px;border-radius:8px}
+button{padding:8px 14px;margin:5px}
+pre{background:#eee;padding:10px}
 </style>
 </head>
 <body>
-<main>
-<h2>Sorgu Paneli</h2>
+<div class="box">
+<h2>Key Panel</h2>
 
 <select id="tip">
 <option value="vip_gunluk">VIP Günlük</option>
@@ -175,33 +168,33 @@ pre{background:#eee;padding:10px;max-height:300px;overflow:auto}
 <option value="admin_yillik">Admin Yıllık</option>
 <option value="admin_suresiz">Admin Süresiz</option>
 </select>
-<button onclick="olustur()">Key Oluştur</button>
+<button onclick="olustur()">Oluştur</button>
 
 <hr>
 
-<input id="k" placeholder="Key">
+<input id="key" placeholder="Key gir">
 <button onclick="kontrol()">Kontrol</button>
 <button onclick="sil()">Sil</button>
 <button onclick="liste()">Liste</button>
 
 <pre id="out"></pre>
-</main>
+</div>
 
 <script>
-const api = location.origin;
+const base = location.origin;
 const out = document.getElementById("out");
 
 function olustur(){
- fetch(api+"/key/olustur/"+tip.value).then(r=>r.json()).then(d=>out.textContent=JSON.stringify(d,null,2))
+ fetch(`${base}/key/olustur/${tip.value}`).then(r=>r.json()).then(d=>out.innerText=JSON.stringify(d,null,2));
 }
 function kontrol(){
- fetch(api+"/key/kontrol?key="+k.value).then(r=>r.json()).then(d=>out.textContent=JSON.stringify(d,null,2))
+ fetch(`${base}/key/kontrol?key=${key.value}`).then(r=>r.json()).then(d=>out.innerText=JSON.stringify(d,null,2));
 }
 function sil(){
- fetch(api+"/key/sil?key="+k.value).then(r=>r.json()).then(d=>out.textContent=JSON.stringify(d,null,2))
+ fetch(`${base}/key/sil?key=${key.value}`).then(r=>r.json()).then(d=>out.innerText=JSON.stringify(d,null,2));
 }
 function liste(){
- fetch(api+"/key/liste").then(r=>r.json()).then(d=>out.textContent=JSON.stringify(d,null,2))
+ fetch(`${base}/key/liste`).then(r=>r.json()).then(d=>out.innerText=JSON.stringify(d,null,2));
 }
 </script>
 </body>
