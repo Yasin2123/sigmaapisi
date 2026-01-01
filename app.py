@@ -1,138 +1,84 @@
-from flask import Flask, request, jsonify, Response
-import json, os, uuid
-from datetime import datetime, timedelta
+import json, os, random, string
+from flask import Flask, jsonify, request, Response
 
 app = Flask(__name__)
 
-DATA_FILE = "keys.json"
+KEYS_FILE = "keys.json"
 
-# Başlangıç: keys.json yoksa oluştur ve Free key ekle
-if not os.path.isfile(DATA_FILE):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump([{
-            "key": "FREESORGUPANELİ2026",
-            "rol": "free",
-            "tip": "sabit",
-            "olusturma_tarihi": datetime.now().isoformat(),
-            "expire": None
-        }], f, indent=2, ensure_ascii=False)
+# keys.json varsa oku, yoksa oluştur
+if os.path.exists(KEYS_FILE):
+    with open(KEYS_FILE, "r") as f:
+        KEYS = json.load(f)
+else:
+    KEYS = {}
 
-def load_keys():
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return []
+def save_keys():
+    with open(KEYS_FILE, "w") as f:
+        json.dump(KEYS, f, indent=2)
 
-def save_keys(keys):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(keys, f, indent=2, ensure_ascii=False)
-
-def temizle_gelmis_keys(keys):
-    yeni_keys = []
-    for k in keys:
-        if k["key"] == "FREESORGUPANELİ2026":
-            yeni_keys.append(k)
-        elif k["expire"]:
-            try:
-                if datetime.fromisoformat(k["expire"]) > datetime.now():
-                    yeni_keys.append(k)
-            except:
-                continue
-        else:
-            yeni_keys.append(k)
-    return yeni_keys
-
-SURELER = {
-    "gunluk": timedelta(days=1),
-    "haftalik": timedelta(weeks=1),
-    "aylik": timedelta(days=30),
-    "yillik": timedelta(days=365)
-}
+def generate_short_key(length=10):
+    chars = string.ascii_uppercase + string.digits
+    return ''.join(random.choices(chars, k=length))
 
 # ------------------ API ------------------
 
-@app.route("/key/olustur/<tip>", methods=["GET"])
-def key_olustur(tip):
-    keys = load_keys()
-    keys = temizle_gelmis_keys(keys)
-
-    yeni_key = str(uuid.uuid4()).upper()
-
-    if "_" in tip:
-        rol, sure_key = tip.split("_", 1)
-        expire = None
-        if sure_key != "suresiz":
-            if sure_key not in SURELER:
-                return jsonify({"durum":"hata","mesaj":"Geçersiz süre tipi"}), 400
-            expire = (datetime.now() + SURELER[sure_key]).isoformat()
+@app.route("/key/olustur/<tip>")
+def olustur(tip):
+    key = generate_short_key(10)
+    
+    if "gunluk" in tip:
+        expire = 1
+    elif "haftalik" in tip:
+        expire = 7
+    elif "aylik" in tip:
+        expire = 30
+    elif "yillik" in tip:
+        expire = 365
     else:
-        return jsonify({"durum":"hata","mesaj":"Tip formatı hatalı. Örn: admin_haftalik veya vip_suresiz"}), 400
+        expire = None  # süresiz
+    
+    KEYS[key] = {"tip": tip, "expire": expire}
+    save_keys()
+    
+    return jsonify({"durum":"basarili","key":key,"tip":tip,"expire":expire})
 
-    key_data = {
-        "key": yeni_key,
-        "rol": rol,
-        "tip": sure_key,
-        "olusturma_tarihi": datetime.now().isoformat(),
-        "expire": expire
-    }
-
-    keys.append(key_data)
-    save_keys(keys)
-
-    return jsonify({"durum":"ok","key":yeni_key,"rol":rol,"tip":sure_key,"expire":expire})
-
-@app.route("/key/kontrol", methods=["GET"])
-def key_kontrol():
+@app.route("/key/kontrol")
+def kontrol():
     key = request.args.get("key")
-    keys = load_keys()
-    keys = temizle_gelmis_keys(keys)
-    save_keys(keys)
-
-    for k in keys:
-        if k["key"] == key:
-            return jsonify({"gecerli": True, "rol": k["rol"], "tip": k["tip"], "expire": k["expire"]})
+    if key in KEYS:
+        return jsonify({"gecerli": True, **KEYS[key]})
     return jsonify({"gecerli": False})
 
-@app.route("/key/sil", methods=["GET"])
-def key_sil():
+@app.route("/key/sil")
+def sil():
     key = request.args.get("key")
-    if key == "FREESORGUPANELİ2026":
-        return jsonify({"durum":"hata","mesaj":"Free key silinemez"})
+    if key in KEYS:
+        KEYS.pop(key)
+        save_keys()
+        return jsonify({"durum":"silindi","key":key})
+    return jsonify({"durum":"bulunamadi","key":key})
 
-    keys = load_keys()
-    yeni_keys = [k for k in keys if k["key"] != key]
-
-    if len(yeni_keys) == len(keys):
-        return jsonify({"durum":"hata","mesaj":"Key yok"})
-
-    save_keys(yeni_keys)
-    return jsonify({"durum":"ok"})
-
-@app.route("/key/liste", methods=["GET"])
-def key_liste():
-    keys = load_keys()
-    keys = temizle_gelmis_keys(keys)
-    save_keys(keys)
-    return jsonify(keys)
+@app.route("/key/liste")
+def liste():
+    return jsonify(KEYS)
 
 # ------------------ HTML ANA MENÜ ------------------
 
 @app.route("/", methods=["GET"])
 def index():
-    html = """
+    html = f"""
 <!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
 <title>Sorgu Paneli</title>
 <style>
-    body { font-family: Arial, sans-serif; background: #f2f2f2; margin:0; padding:0; }
-    header { background: #4CAF50; color: white; padding: 15px; text-align: center; }
-    main { padding: 20px; max-width: 800px; margin: auto; background: white; margin-top: 30px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-    button { padding: 10px 15px; margin: 5px; cursor: pointer; border:none; border-radius:5px; background:#4CAF50; color:white; }
-    input, select { padding:8px; margin:5px; }
-    #output { background:#eee; padding:10px; margin-top:10px; border-radius:5px; white-space: pre-wrap; max-height:300px; overflow:auto; }
+    body {{ font-family: Arial, sans-serif; background: #f2f2f2; margin:0; padding:0; }}
+    header {{ background: #4CAF50; color: white; padding: 15px; text-align: center; }}
+    main {{ padding: 20px; max-width: 800px; margin: auto; background: white; margin-top: 30px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }}
+    button {{ padding: 10px 15px; margin: 5px; cursor: pointer; border:none; border-radius:5px; background:#4CAF50; color:white; }}
+    input, select {{ padding:8px; margin:5px; }}
+    #output {{ background:#eee; padding:10px; margin-top:10px; border-radius:5px; white-space: pre-wrap; max-height:300px; overflow:auto; }}
 </style>
 </head>
 <body>
@@ -182,32 +128,32 @@ def index():
 <script>
 const baseUrl = window.location.origin;
 
-function olustur(){
+function olustur(){{
     const tip = document.getElementById("keyTip").value;
-    fetch(`${baseUrl}/key/olustur/${tip}`)
+    fetch(`${{baseUrl}}/key/olustur/${{tip}}`)
     .then(res => res.json())
-    .then(data => { document.getElementById("output").innerText = JSON.stringify(data,null,2); });
-}
+    .then(data => {{ document.getElementById("output").innerText = JSON.stringify(data,null,2); }});
+}}
 
-function kontrol(){
+function kontrol(){{
     const key = document.getElementById("kontrolKey").value;
-    fetch(`${baseUrl}/key/kontrol?key=${key}`)
+    fetch(`${{baseUrl}}/key/kontrol?key=${{key}}`)
     .then(res => res.json())
-    .then(data => { document.getElementById("output").innerText = JSON.stringify(data,null,2); });
-}
+    .then(data => {{ document.getElementById("output").innerText = JSON.stringify(data,null,2); }});
+}}
 
-function sil(){
+function sil(){{
     const key = document.getElementById("silKey").value;
-    fetch(`${baseUrl}/key/sil?key=${key}`)
+    fetch(`${{baseUrl}}/key/sil?key=${{key}}`)
     .then(res => res.json())
-    .then(data => { document.getElementById("output").innerText = JSON.stringify(data,null,2); });
-}
+    .then(data => {{ document.getElementById("output").innerText = JSON.stringify(data,null,2); }});
+}}
 
-function listele(){
-    fetch(`${baseUrl}/key/liste`)
+function listele(){{
+    fetch(`${{baseUrl}}/key/liste`)
     .then(res => res.json())
-    .then(data => { document.getElementById("output").innerText = JSON.stringify(data,null,2); });
-}
+    .then(data => {{ document.getElementById("output").innerText = JSON.stringify(data,null,2); }});
+}}
 </script>
 </body>
 </html>
